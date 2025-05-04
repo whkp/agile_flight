@@ -42,8 +42,10 @@ class AgileCommand:
 
 
 class AgileQuadState:
-    def __init__(self, quad_state):
+    def __init__(self, quad_state, desVel):
         self.t = quad_state.t
+
+        self.desired_velocity = desVel
 
         self.pos = np.array([quad_state.pose.position.x,
                              quad_state.pose.position.y,
@@ -58,6 +60,9 @@ class AgileQuadState:
         self.omega = np.array([quad_state.velocity.angular.x,
                                quad_state.velocity.angular.y,
                                quad_state.velocity.angular.z], dtype=np.float32)
+        self.acc = np.array([quad_state.acceleration.linear.x,
+                              quad_state.acceleration.linear.y,
+                              quad_state.acceleration.linear.z], dtype=np.float32)
 
     def __repr__(self):
         repr_str = "AgileQuadState:\n" \
@@ -67,3 +72,11 @@ class AgileQuadState:
                    + " vel:   [%.2f, %.2f, %.2f]\n" % (self.vel[0], self.vel[1], self.vel[2]) \
                    + " omega: [%.2f, %.2f, %.2f]" % (self.omega[0], self.omega[1], self.omega[2])
         return repr_str
+    
+    def get_yaw(self):
+        qw, qx, qy, qz = self.att
+        sin_yaw_coeff = 2.0 * (qw * qz + qx * qy)
+        cos_yaw_coeff = 1.0 - 2.0 * (qy**2 + qz**2)
+        yaw = np.arctan2(sin_yaw_coeff, cos_yaw_coeff)
+        return yaw
+        

@@ -33,3 +33,7 @@ GPATH
 .vscode/*
 
 saved
+
+# datasets
+
+training/datasets/data/*

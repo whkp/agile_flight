@@ -13,6 +13,7 @@ from envsim_msgs.msg import ObstacleArray
 from rl_example import load_rl_policy
 from user_code import compute_command_vision_based, compute_command_state_based
 from utils import AgileCommandMode, AgileQuadState
+from VisionController import VisionBasedController, init_controller
 
 import cv2
 from copy import deepcopy
@@ -37,7 +38,21 @@ class AgilePilotNode:
         self.last_valid_img = None
         self.rgb_img = None
         self.desiredVel = desVel
-        self.data_recorded = False
+
+        self.start_time = 0
+        self.init = 0
+        self.t1 = 0
+        self.col = None
+        self.data_recorded = True
+        self.data_collection_xrange = [2, 60]
+        self.time_interval = .03
+        self.count = 0
+        self.depth_im_threshold = 0.09
+
+        #自定义从轨迹到控制指令生成
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'best_drone_navigation_model.pth')
+        trajectory_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'selected_indices_yaw.npy')
+        self.controller = VisionBasedController(model_path, trajectory_path)
 
         data_log_format = {'timestamp':[],
                            'desired_vel':[],
@@ -51,6 +66,9 @@ class AgilePilotNode:
                            'vel_x':[],
                            'vel_y':[],
                            'vel_z':[],
+                           'acc_x':[],
+                           'acc_y':[],
+                           'acc_z':[],
                            'velcmd_x':[],
                            'velcmd_y':[],
                            'velcmd_z':[],
@@ -95,15 +113,25 @@ class AgilePilotNode:
         print("Initialization completed!")
 
     def img_callback(self, img_data):
+        if self.controller is None:
+            try:
+                init_controller()
+            except Exception as e:
+                rospy.logerr(f"Failed to initialize controller: {str(e)}")
+                return
+
         img = self.cv_bridge.imgmsg_to_cv2(img_data, desired_encoding='passthrough')
-        if self.last_valid_img == None:
-            self.last_valid_img = deepcopy(self.last_valid_img)
+        # 将深度图像归一化到[0, 1]
+        img = np.clip(img/self.depth_im_threshold, 0, 1)
+        #跟踪有效的图像数据
+        self.last_valid_img = deepcopy(img) if img.min() > 0.0 else self.last_valid_img
+
         if not self.vision_based:
             return
         if self.state is None:
             return
         cv_image = self.cv_bridge.imgmsg_to_cv2(img_data, desired_encoding='passthrough')
-        command = compute_command_vision_based(self.state, cv_image)
+        command = compute_command_vision_based(self.state, cv_image, controller=self.controller, desiredVel = self.desiredVel)
         self.publish_command(command)
 
     def rgb_img_callback(self, img_data):
@@ -111,7 +139,7 @@ class AgilePilotNode:
 
 
     def state_callback(self, state_data):
-        self.state = AgileQuadState(state_data)
+        self.state = AgileQuadState(state_data, self.desiredVel)
 
     def obstacle_callback(self, obs_data):
         if self.vision_based:
@@ -143,8 +171,9 @@ class AgilePilotNode:
 
                 # Save the image by the name of that instant
                 # np.save(self.folder + f"/im_{timestamp}", self.last_valid_img)
+                #只保存深度图像
                 cv2.imwrite(f"{self.folder}/{str(timestamp)}.png", (self.last_valid_img*255).astype(np.uint8))
-                cv2.imwrite(f"{self.folder}/{str(timestamp)}_rgb.png", (self.rgb_img*255).astype(np.uint8))
+                #cv2.imwrite(f"{self.folder}/{str(timestamp)}_rgb.png", (self.rgb_img*255).astype(np.uint8))
 
                 # Get the collision flag
                 col = self.if_collide(obs_data.obstacles[0])
@@ -163,6 +192,9 @@ class AgilePilotNode:
                     self.state.vel[0],
                     self.state.vel[1],
                     self.state.vel[2],
+                    self.state.acc[0],
+                    self.state.acc[1],
+                    self.state.acc[2],
                     command.velocity[0],
                     command.velocity[1],
                     command.velocity[2],
@@ -227,7 +259,7 @@ class AgilePilotNode:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Agile Pilot.')
     parser.add_argument('--vision_based', help='Fly vision-based', required=False, dest='vision_based',
-                        action='store_true')
+                        action='store_false')
     parser.add_argument('--desVel', type=float, help='Desired velocity', default=5.0)
     parser.add_argument('--ppo_path', help='PPO neural network policy', required=False,  default=None)
 

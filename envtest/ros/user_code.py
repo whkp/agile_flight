@@ -5,6 +5,8 @@ from pickle import NONE
 from utils import AgileCommandMode, AgileCommand
 from rl_example import rl_example
 import numpy as np
+import rospy
+from VisionController import VisionBasedController, init_controller
 
 def check_collision(line, obstacle):
     # 获取线段的起点和终点坐标
@@ -29,7 +31,7 @@ def check_collision(line, obstacle):
     # 判断是否有碰撞
     return b**2 - 4 * a * c >= 0
 
-def compute_command_vision_based(state, img):
+def compute_command_vision_based(state, img, controller=None, desiredVel = 5.0):
     ################################################
     # !!! Begin of user code !!!
     # TODO: populate the command message
@@ -38,25 +40,44 @@ def compute_command_vision_based(state, img):
     # print(state)
     # print("Image shape: ", img.shape)
 
-    # Example of SRT command
-    command_mode = 0
-    command = AgileCommand(command_mode)
-    command.t = state.t
-    command.rotor_thrusts = [1.0, 1.0, 1.0, 1.0]
-
-    # Example of CTBR command
-    command_mode = 1
-    command = AgileCommand(command_mode)
-    command.t = state.t
-    command.collective_thrust = 15.0
-    command.bodyrates = [0.0, 0.0, 0.0]
-
-    # Example of LINVEL command (velocity is expressed in world frame)
+    # 确保控制器已初始化
+    if controller is None:
+        try:
+            init_controller()
+        except Exception as e:
+            rospy.logerr(f"Failed to initialize controller: {str(e)}")
+            # 返回安全的默认命令
+            command_mode = 2  # LINVEL模式
+            command = AgileCommand(command_mode)
+            command.t = state.t
+            command.velocity = [0.0, 0.0, 0.0]  # 悬停
+            command.yawrate = 0.0
+            return command
+    
+    # 使用模型进行预测
+    prediction = controller.predict(state, img)
+    
+    # 选择命令模式（以LINVEL为例）
     command_mode = 2
-    command = AgileCommand(command_mode)
-    command.t = state.t
-    command.velocity = [1.0, 0.0, 0.0]
-    command.yawrate = 0.0
+    
+    # 将预测转换为命令
+    command = controller.trajectory_to_command(prediction, command_mode, target_vel=desiredVel)
+    
+    # 如果转换失败，返回安全的默认命令
+    if command is None:
+        command = AgileCommand(command_mode)
+        command.t = state.t
+        command.velocity = [0.5, 0.0, 0.0]  # 往前缓慢飞行
+        command.yawrate = 0.0
+    else:
+        # 设置时间戳
+        command.t = state.t
+    #高度太低修正z轴速度
+    if(state.pos[2] < 0.5) and (command.velocity[2] < 0):
+        command.velocity[2] = (1 - state.pos[2]) * 2
+
+    # 记录日志
+    rospy.loginfo(f"Command: mode={command_mode}, vel=[{command.velocity[0]:.2f}, {command.velocity[1]:.2f}, {command.velocity[2]:.2f}], yawrate={command.yawrate:.2f}")
 
     ################################################
     # !!! End of user code !!!
